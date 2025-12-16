@@ -148,4 +148,51 @@ app.listen(port, () => {
     db.query('SELECT NOW()')
         .then(() => console.log('Подключение к PostgreSQL успешно установлено!'))
         .catch(err => console.error('Ошибка подключения к PostgreSQL:', err.message));
+
+});
+// --- ИЗБРАННОЕ: НЕЙРОСЕТИ ---
+
+// Добавить в избранное
+app.post(`${API_VERSION}/favorites/networks`, async (req, res) => {
+    const { user_id, neuro_id } = req.body;
+    try {
+        await pool.query(
+            'INSERT INTO User_Favorites (user_id, neuro_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            [user_id, neuro_id]
+        );
+        res.status(201).json({ message: 'Добавлено в избранное' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Получить избранное пользователя
+app.get(`${API_VERSION}/favorites/networks/:user_id`, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT nn.*, nc.category_name 
+            FROM Neural_Networks nn
+            JOIN User_Favorites uf ON nn.neuro_id = uf.neuro_id
+            JOIN Neuro_Categories nc ON nn.category_id = nc.category_id
+            WHERE uf.user_id = $1
+        `, [req.params.user_id]);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- ИЗБРАННОЕ: КАТЕГОРИИ ---
+
+app.post(`${API_VERSION}/favorites/categories`, async (req, res) => {
+    const { user_id, category_id } = req.body;
+    try {
+        await pool.query(
+            'INSERT INTO Favorite_Categories (user_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            [user_id, category_id]
+        );
+        res.status(201).json({ message: 'Категория сохранена' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
