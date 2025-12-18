@@ -7,25 +7,18 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const API_VERSION = '/api/v1';
 
-// Настройки
 app.use(cors());
 app.use(express.json());
 
-// Подключение к БД
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
 });
 
-pool.connect((err, client, release) => {
-    if (err) return console.error('Ошибка БД:', err.stack);
-    console.log('Подключение к PostgreSQL успешно!');
-    release();
-});
-
 // --- АВТОРИЗАЦИЯ ---
 app.post(`${API_VERSION}/auth/register`, async (req, res) => {
     const { email, password, username } = req.body;
+    if (!email || !password || !username) return res.status(400).json({ error: 'Все поля обязательны' });
     try {
         const result = await pool.query(
             'INSERT INTO Users (email, password, username) VALUES ($1, $2, $3) RETURNING user_id',
@@ -45,7 +38,7 @@ app.post(`${API_VERSION}/auth/login`, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- НЕЙРОСЕТИ И КАТЕГОРИИ ---
+// --- НЕЙРОСЕТИ ---
 app.get(`${API_VERSION}/categories`, async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM Neuro_Categories ORDER BY category_name');
@@ -71,7 +64,7 @@ app.post(`${API_VERSION}/favorites/networks`, async (req, res) => {
     const { user_id, neuro_id } = req.body;
     try {
         await pool.query('INSERT INTO User_Favorites (user_id, neuro_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [user_id, neuro_id]);
-        res.status(201).json({ message: 'Ок' });
+        res.status(201).json({ message: 'Добавлено' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -104,4 +97,4 @@ app.get(`${API_VERSION}/favorites/categories/:user_id`, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.listen(PORT, () => console.log(`Сервер на порту ${PORT}`));
+app.listen(PORT, () => console.log(`API v1 на порту ${PORT}`));
