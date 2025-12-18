@@ -7,33 +7,18 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const API_VERSION = '/api/v1';
 
-// Настройка CORS для работы с GitHub Pages
 app.use(cors());
 app.use(express.json());
 
-// Подключение к базе данных Render
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: { rejectUnauthorized: false }
 });
 
-// Проверка подключения к БД при запуске
-pool.connect((err, client, release) => {
-    if (err) {
-        return console.error('Ошибка подключения к БД:', err.stack);
-    }
-    console.log('Успешное подключение к базе данных PostgreSQL');
-    release();
-});
+// --- АВТОРИЗАЦИЯ (с учетом password_hash) ---
 
-// --- АВТОРИЗАЦИЯ ---
-
-// Регистрация: используем password_hash как в вашей БД
 app.post(`${API_VERSION}/auth/register`, async (req, res) => {
     const { email, password, username } = req.body;
-    if (!email || !password || !username) {
-        return res.status(400).json({ error: 'Все поля обязательны для заполнения' });
-    }
     try {
         const result = await pool.query(
             'INSERT INTO Users (email, password_hash, username) VALUES ($1, $2, $3) RETURNING user_id',
@@ -41,48 +26,26 @@ app.post(`${API_VERSION}/auth/register`, async (req, res) => {
         );
         res.status(201).json({ user_id: result.rows[0].user_id });
     } catch (err) {
-        console.error('Ошибка регистрации:', err.message);
-        if (err.code === '23505') {
-            res.status(400).json({ error: 'Этот Email уже зарегистрирован' });
-        } else {
-            res.status(500).json({ error: 'Ошибка сервера при регистрации' });
-        }
+        if (err.code === '23505') res.status(400).json({ error: 'Email уже занят' });
+        else res.status(500).json({ error: err.message });
     }
 });
 
-// Вход: сравниваем с колонкой password_hash
 app.post(`${API_VERSION}/auth/login`, async (req, res) => {
     const { email, password } = req.body;
     try {
-        const result = await pool.query(
-            'SELECT user_id, username, password_hash FROM Users WHERE email = $1', 
-            [email]
-        );
-        
+        const result = await pool.query('SELECT * FROM Users WHERE email = $1', [email]);
         if (result.rows.length > 0 && result.rows[0].password_hash === password) {
-            res.json({ 
-                user_id: result.rows[0].user_id, 
-                username: result.rows[0].username 
-            });
+            res.json({ user_id: result.rows[0].user_id, username: result.rows[0].username });
         } else {
-            res.status(401).json({ error: 'Неверный email или пароль' });
+            res.status(401).json({ error: 'Неверные данные' });
         }
-    } catch (err) {
-        console.error('Ошибка входа:', err.message);
-        res.status(500).json({ error: 'Техническая ошибка на сервере' });
-    }
-});
-
-// --- НЕЙРОСЕТИ И КАТЕГОРИИ ---
-
-app.get(`${API_VERSION}/categories`, async (req, res) => {
-    try {
-        const result = await pool.query('SELECT * FROM Neuro_Categories ORDER BY category_name');
-        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+
+// --- НЕЙРОСЕТИ (Добавлена цена и рейтинг) ---
 
 app.get(`${API_VERSION}/networks`, async (req, res) => {
     const { category_id, search } = req.query;
@@ -110,24 +73,55 @@ app.get(`${API_VERSION}/networks`, async (req, res) => {
     }
 });
 
+// НОВОЕ: Оценка нейросети пользователем
+app.post(`${API_VERSION}/networks/:id/rate`, async (req, res) => {
+    const neuroId = req.params.id;
+    const { user_id, rating } = req.body;
+
+    try {
+        // 1. Добавляем или обновляем оценку
+        await pool.query(
+            `INSERT INTO User_Ratings (user_id, neuro_id, rating_value) 
+             VALUES ($1, $2, $3) 
+             ON CONFLICT (user_id, neuro_id) DO UPDATE SET rating_value = $3`,
+            [user_id, neuroId, rating]
+        );
+
+        // 2. Считаем средний рейтинг
+        const avgResult = await pool.query(
+            'SELECT AVG(rating_value) as avg FROM User_Ratings WHERE neuro_id = $1',
+            [neuroId]
+        );
+        
+        const newAvg = avgResult.rows[0].avg;
+
+        // 3. Обновляем средний рейтинг в таблице сетей
+        await pool.query(
+            'UPDATE Neural_Networks SET average_rating = $1 WHERE neuro_id = $2',
+            [newAvg, neuroId]
+        );
+
+        res.json({ success: true, newAverage: parseFloat(newAvg).toFixed(1) });
+    } catch (err) {
+        res.status(500).json({ error: 'Ошибка при сохранении оценки' });
+    }
+});
+
 // --- ИЗБРАННОЕ ---
 
-// Добавить нейросеть в избранное
 app.post(`${API_VERSION}/favorites/networks`, async (req, res) => {
     const { user_id, neuro_id } = req.body;
     try {
         await pool.query(
-            'INSERT INTO User_Favorites (user_id, neuro_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', 
+            'INSERT INTO User_Favorites (user_id, neuro_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
             [user_id, neuro_id]
         );
-        res.status(201).json({ message: 'Добавлено в избранное' });
+        res.status(201).json({ message: 'Добавлено' });
     } catch (err) {
-        console.error('Ошибка избранного (сети):', err.message);
-        res.status(500).json({ error: 'Не удалось сохранить в избранное' });
+        res.status(500).json({ error: err.message });
     }
 });
 
-// Получить избранные сети пользователя
 app.get(`${API_VERSION}/favorites/networks/:user_id`, async (req, res) => {
     try {
         const result = await pool.query(`
@@ -141,36 +135,15 @@ app.get(`${API_VERSION}/favorites/networks/:user_id`, async (req, res) => {
     }
 });
 
-// Сохранить категорию
-app.post(`${API_VERSION}/favorites/categories`, async (req, res) => {
-    const { user_id, category_id } = req.body;
+app.get(`${API_VERSION}/categories`, async (req, res) => {
     try {
-        await pool.query(
-            'INSERT INTO Favorite_Categories (user_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', 
-            [user_id, category_id]
-        );
-        res.status(201).json({ message: 'Категория сохранена' });
-    } catch (err) {
-        console.error('Ошибка избранного (категории):', err.message);
-        res.status(500).json({ error: 'Не удалось сохранить категорию' });
-    }
-});
-
-// Получить избранные категории
-app.get(`${API_VERSION}/favorites/categories/:user_id`, async (req, res) => {
-    try {
-        const result = await pool.query(`
-            SELECT nc.* FROM Neuro_Categories nc
-            JOIN Favorite_Categories fc ON nc.category_id = fc.category_id
-            WHERE fc.user_id = $1`, [req.params.user_id]);
+        const result = await pool.query('SELECT * FROM Neuro_Categories');
         res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// Запуск сервера
 app.listen(PORT, () => {
     console.log(`Сервер запущен на порту ${PORT}`);
-    console.log(`API доступно по адресу: ${API_VERSION}`);
 });
