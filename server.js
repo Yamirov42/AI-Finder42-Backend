@@ -16,26 +16,40 @@ const pool = new Pool({
 });
 
 // --- АВТОРИЗАЦИЯ ---
-app.post(`${API_VERSION}/auth/register`, async (req, res) => {
-    const { email, password, username } = req.body;
-    if (!email || !password || !username) return res.status(400).json({ error: 'Все поля обязательны' });
-    try {
-        const result = await pool.query(
-            'INSERT INTO Users (email, password, username) VALUES ($1, $2, $3) RETURNING user_id',
-            [email, password, username]
-        );
-        res.status(201).json({ user_id: result.rows[0].user_id });
-    } catch (err) { res.status(400).json({ error: 'Email уже занят' }); }
-});
-
 app.post(`${API_VERSION}/auth/login`, async (req, res) => {
     const { email, password } = req.body;
     try {
-        const result = await pool.query('SELECT * FROM Users WHERE email = $1', [email]);
-        if (result.rows.length > 0 && result.rows[0].password === password) {
-            res.json({ user_id: result.rows[0].user_id, username: result.rows[0].username });
-        } else { res.status(401).json({ error: 'Неверные данные' }); }
-    } catch (err) { res.status(500).json({ error: err.message }); }
+
+        const result = await pool.query('SELECT user_id, username, password_hash FROM Users WHERE email = $1', [email]);
+        
+        if (result.rows.length > 0 && result.rows[0].password_hash === password) {
+            res.json({ 
+                user_id: result.rows[0].user_id, 
+                username: result.rows[0].username 
+            });
+        } else {
+            res.status(401).json({ error: 'Неверный пароль или email' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Ошибка сервера: ' + err.message });
+    }
+});
+
+app.post(`${API_VERSION}/auth/register`, async (req, res) => {
+    const { email, password, username } = req.body;
+    try {
+        const result = await pool.query(
+            'INSERT INTO Users (email, password_hash, username) VALUES ($1, $2, $3) RETURNING user_id',
+            [email, password, username]
+        );
+        res.status(201).json({ user_id: result.rows[0].user_id });
+    } catch (err) {
+        if (err.code === '23505') {
+            res.status(400).json({ error: 'Email уже занят' });
+        } else {
+            res.status(500).json({ error: err.message });
+        }
+    }
 });
 
 // --- НЕЙРОСЕТИ ---
@@ -98,3 +112,4 @@ app.get(`${API_VERSION}/favorites/categories/:user_id`, async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`API v1 на порту ${PORT}`));
+
