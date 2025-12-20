@@ -1,7 +1,7 @@
 // db.js
 const { Pool } = require('pg');
 
-// Render автоматически предоставляет Internal Connection String (для безопасного подключения)
+// Render автоматически предоставляет Internal Connection String 
 // через переменную окружения DATABASE_URL.
 const connectionString = process.env.DATABASE_URL;
 
@@ -22,4 +22,5 @@ const pool = new Pool({
 });
 
 // Экспортируем пул для использования в server.js
+
 module.exports = pool;
